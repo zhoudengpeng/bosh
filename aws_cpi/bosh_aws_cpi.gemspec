@@ -18,8 +18,7 @@ Gem::Specification.new do |s|
   s.bindir       = "bin"
   s.executables  = %w(bosh_aws_console)
 
-  s.add_dependency "aws-sdk", ">=1.3.5"
-  s.add_dependency "bosh_common", ">=0.5.0"
+  s.add_dependency "aws-sdk", ">=1.8.0"
   s.add_dependency "bosh_cpi", ">=0.5.1"
   s.add_dependency "httpclient", ">=2.2.0"
   s.add_dependency "uuidtools", ">=2.1.2"
