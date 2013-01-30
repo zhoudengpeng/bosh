@@ -20,14 +20,5 @@ module Bosh::AwsCloud
       @ip
     end
 
-    # Configure manual network
-    #
-    # @param [AWS:EC2] ec2 EC2 client
-    # @param [AWS::EC2::Instance] instance EC2 instance to configure
-    def configure(ec2, instance)
-      # we're actually not configuring anything here, it is done in the
-      # create instance call where we pass the IP the instance should have
-    end
-
   end
 end
