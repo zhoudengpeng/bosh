@@ -18,15 +18,15 @@ module Bosh::AwsCloud
       set_user_data_parameter(networks_spec)
       set_key_name_parameter(resource_pool["key_name"], options["aws"]["default_key_name"])
       set_security_groups_parameter(networks_spec, options["aws"]["default_security_group_options"])
-      set_vpc_parameters(network_spec)
+      set_vpc_parameters(networks_spec)
       set_availability_zone_parameter(
-          disk_locality.map { |volume_id| @region.volumes[volume_id].availability_zone },
+          (disk_locality || []).map { |volume_id| @region.volumes[volume_id].availability_zone },
           resource_pool["availability_zone"],
           (@instance_params[:subnet].availability_zone_name if @instance_params[:subnet])
       )
 
       @logger.info("Creating new instance with: #{instance_params.inspect}")
-      @region.instances.create(instance_params)
+      @region.instances.create instance_params
     end
 
     def terminate(instance_id)
@@ -72,7 +72,7 @@ module Bosh::AwsCloud
     end
 
     def set_vpc_parameters(network_spec)
-      manual_network_spec = network_spec.values.find { |spec| !spec.has_key? "type" || spec["type"] == "manual" }
+      manual_network_spec = network_spec.values.select{ |spec| ["manual", nil].include? spec["type"] }.first
       if manual_network_spec
         instance_params[:subnet] = @region.subnets[manual_network_spec["subnet"]]
         instance_params[:private_ip_address] = manual_network_spec["ip"]
@@ -84,12 +84,11 @@ module Bosh::AwsCloud
       instance_params[:availability_zone] = availability_zone if availability_zone
     end
 
-    def set_user_data_parameter(network_spec)
-      data = {"registry" => {"endpoint" => @registry.endpoint}}
-      property_with_dns = network_spec.values.find { |property| property.has_key? "dns" }
-      data["dns"] = {"nameserver" => property_with_dns["dns"]} if property_with_dns
+    def set_user_data_parameter(networks_spec)
+      @instance_params[:user_data] = {registry: {endpoint: @registry.endpoint}}
 
-      @instance_params[:user_data] = Yajl::Encoder.encode(data)
+      spec_with_dns = networks_spec.values.select { |spec| spec.has_key? "dns" }.first
+      @instance_params[:user_data][:dns] = {nameserver: spec_with_dns["dns"]} if spec_with_dns
     end
 
     private

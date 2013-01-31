@@ -1,177 +1,250 @@
 require "spec_helper"
 
 describe Bosh::AwsCloud::InstanceManager do
-
   let(:registry) { double("registry", :endpoint => "http://...", :update_settings => nil) }
-  let(:instance_id) { "i-xxxxxxxx" }
-  let(:instance) { double("fake_instance", :id => instance_id, :elastic_ip => nil) }
   let(:region) { mock_ec2 }
-  let(:im) { Bosh::AwsCloud::InstanceManager.new(region, registry) }
 
   describe "#create" do
+    let(:availability_zone_selector) { double("availability zone selector") }
 
-    let(:agent_id) { "agent-id" }
-    let(:stemcell_id) { "stemcell-id" }
-    let(:resource_pool) { {"instance_type" => "m1.small"} }
-    let(:network_spec) { {"default" => {"type" => "dynamic"}} }
-    let(:disk_locality) { nil }
-    let(:environment) { nil }
-    let(:options) { {"aws" => {"region" => "us-east-1"}} }
-    let(:this_zone) { "us-east-1a" }
-    let(:az_selector) { double("az_selector", :common_availability_zone => this_zone) }
-    let(:instances) { double("instances") }
+    it "should ask AWS to create an instance in the given region, with parameters built up from the given arguments" do
+      instances = double("instances")
+      fake_aws_subnet = double("aws_subnet").as_null_object
 
-    let(:im) {
-      im = Bosh::AwsCloud::InstanceManager.new(region, registry, az_selector)
-      im.stub_chain(:stemcell, :root_device_name).and_return("/dev/foo")
-      im.stub(:generate_unique_name).and_return("unique-id")
-      im.stub(:wait_resource)
-      im.stub(:user_data).and_return("user data as json")
-      im
-    }
-
-    before do
       region.stub(:instances).and_return(instances)
-    end
+      region.stub(:subnets).and_return({"sub-123456" => fake_aws_subnet})
+      availability_zone_selector.stub(:common_availability_zone).and_return("us-east-1a")
 
-    it "passes dns servers in ec2 user data when present" do
-      im = Bosh::AwsCloud::InstanceManager.new(region, registry, az_selector)
-      im.stub_chain(:stemcell, :root_device_name).and_return("/dev/foo")
-      im.stub(:wait_resource)
+      instances.should_receive(:create).with(
+      {
+              count: 1,
+              image_id: "stemcell-id",
+              instance_type: "m1.small",
+              user_data: {registry: {endpoint: "http://..."}, dns: {nameserver: "foo"}},
+              key_name: "bar",
+              security_groups: ["baz"],
+              subnet: fake_aws_subnet,
+              private_ip_address: "1.2.3.4",
+              availability_zone: "us-east-1a"
+          }
+      )
 
-      registry.stub(:endpoint).and_return("registry endpoint")
-      fake_network_configurator = mock("network_configurator", :vpc? => false, :security_groups => [])
-      fake_network_configurator.stub(:configure)
+      instance_manager = described_class.new(region, registry, availability_zone_selector)
 
-      Bosh::AwsCloud::NetworkConfigurator.stub(:new).and_return(fake_network_configurator)
-
-      instances.should_receive(:create) do |params|
-        params[:user_data].should == Yajl::Encoder.encode({
-                                                              "registry" => {
-                                                                  "endpoint" => "registry endpoint"
-                                                              },
-                                                              "dns" => {
-                                                                  "nameserver" => %w[1.2.3.4 4.5.6.7]
-                                                              }
-                                                          })
-        instance
-      end
-
-      network_spec = {"default" => {"type" => "vip"}, "foo" => {"type" => "manual", "dns" => %w[1.2.3.4 4.5.6.7]}}
-
-      im.create(agent_id, stemcell_id, resource_pool, network_spec, disk_locality, environment, options)
-    end
-
-    it "should set the count instance parameter to 1"
-
-    it "creates the instance with correct security group" do
-
-      instances.should_receive(:create) do |params|
-        params[:availability_zone].should == this_zone
-        instance
-      end
-      im.create(agent_id, stemcell_id, resource_pool, network_spec, disk_locality, environment, options)
-    end
-
-    context "vpc" do
-      it "should create an instance in a subnet when a manual network is used" do
-        subnet_id = "subnet-xxxxxx"
-        private_ip = "1.2.3.4"
-        fake_aws_subnet = double("aws_subnet", :id => subnet_id, :availability_zone_name => this_zone)
-
-        instances.should_receive(:create) do |params|
-          params[:private_ip_address].should == private_ip
-          params[:subnet].should == fake_aws_subnet
-          instance
-        end
-        region.stub_chain(:subnets, :[]).and_return(fake_aws_subnet)
-
-        network_spec = {"default" => {"type" => "manual", "ip" => private_ip, "cloud_properties" => {"subnet" => subnet_id}}}
-
-        im.create(agent_id, stemcell_id, resource_pool, network_spec, disk_locality, environment, options)
-      end
-    end
-
-    context "ec2" do
-      it "should create an instance with parameters for dynamic network" do
-        instances.should_receive(:create) do |params|
-          params[:image_id].should == stemcell_id
-          params[:instance_type].should == resource_pool["instance_type"]
-          params[:availability_zone].should == this_zone
-          params[:security_groups].should == []
-          params.should_not have_key("subnet")
-          instance
-        end
-
-        registry.stub(:update_settings)
-
-        im.create(agent_id, stemcell_id, resource_pool, network_spec, disk_locality, environment, options)
-      end
-
-      it "should only add the az option if it is present" do
-
-        instances.should_receive(:create) do |params|
-          params.should_not have_key(:availability_zone)
-          instance
-        end
-        az_selector.stub(:common_availability_zone).and_return(nil)
-
-        im.create(agent_id, stemcell_id, resource_pool, network_spec, disk_locality, environment, options)
-      end
+      agent_id = "agent-id"
+      stemcell_id = "stemcell-id"
+      resource_pool = {"instance_type" => "m1.small", "key_name" => "bar"}
+      networks_spec = {
+          "default" => {
+              "type" => "dynamic",
+              "dns" => "foo",
+              "cloud_properties" => {"security_groups" => "baz"}
+          },
+          "other" => {
+              "type" => "manual",
+              "subnet" => "sub-123456",
+              "ip" => "1.2.3.4"
+          }
+      }
+      disk_locality = nil
+      environment = nil
+      options = {"aws" => {"region" => "us-east-1"}}
+      instance_manager.create(agent_id, stemcell_id, resource_pool, networks_spec, disk_locality, environment, options)
     end
   end
 
-  describe "#set_key_name_parameter" do
-    it "should set the key name instance parameter to the first non-null argument" do
-      instance_manager = described_class.new(region, registry)
+  describe "setting instance parameters" do
+    let(:availability_zone_selector) { double("availability zone selector") }
 
-      instance_manager.set_key_name_parameter("foo", nil)
-      instance_manager.instance_params[:key_name].should == "foo"
+    describe "#set_key_name_parameter" do
+      it "should set the key name instance parameter to the first non-null argument" do
+        instance_manager = described_class.new(region, registry)
 
-      instance_manager.set_key_name_parameter(nil, "bar")
-      instance_manager.instance_params[:key_name].should == "bar"
+        instance_manager.set_key_name_parameter("foo", nil)
+        instance_manager.instance_params[:key_name].should == "foo"
+
+        instance_manager.set_key_name_parameter(nil, "bar")
+        instance_manager.instance_params[:key_name].should == "bar"
+      end
+
+      it "should not have a key name instance parameter if it receives only null arguments" do
+        instance_manager = described_class.new(region, registry)
+
+        instance_manager.set_key_name_parameter(nil, nil)
+        instance_manager.instance_params.keys.should_not include(:key_name)
+      end
     end
 
-    it "should not have a key name instance parameter if it receives only null arguments" do
-      instance_manager = described_class.new(region, registry)
+    describe "#set_security_groups_parameter" do
+      context "when the networks specs have security groups" do
+        it "returns a unique list of the specified group names" do
+          instance_manager = described_class.new(region, registry)
+          instance_manager.set_security_groups_parameter(
+              {
+                  "network" => {"cloud_properties" => {"security_groups" => "yay"}},
+                  "artwork" => {"cloud_properties" => {"security_groups" => ["yay", "aya"]}}
+              },
+              ["default_1", "default_2"]
+          )
 
-      instance_manager.set_key_name_parameter(nil, nil)
-      instance_manager.instance_params.keys.should_not include(:key_name)
+          instance_manager.instance_params[:security_groups].should =~ ["yay", "aya"]
+        end
+      end
+
+      context "when the networks specs have no security groups specified" do
+        it "returns the list of default AWS group names" do
+          instance_manager = described_class.new(region, registry)
+          instance_manager.set_security_groups_parameter(
+              {"network" => {"cloud_properties" => {"foo" => "bar"}}},
+              ["default_1", "default_2"]
+          )
+
+          instance_manager.instance_params[:security_groups].should =~ ["default_1", "default_2"]
+        end
+      end
+    end
+
+    describe "#set_vpc_parameters" do
+      let(:fake_aws_subnet) { mock("aws_subnet") }
+
+      before do
+        region.stub(:subnets).and_return({"sub-123456" => fake_aws_subnet})
+      end
+
+      context "when there is a manual network in the specs" do
+        it "should not set the subnet and private IP address parameters" do
+          instance_manager = described_class.new(region, registry)
+          instance_manager.set_vpc_parameters(
+              {"network" => {"type" => "designed by robots", "ip" => "1.2.3.4", "subnet" => "sub-123456"}}
+          )
+
+          instance_manager.instance_params.keys.should_not include(:private_ip_address)
+          instance_manager.instance_params.keys.should_not include(:subnet)
+        end
+      end
+
+      context "when there is a manual network in the specs" do
+        it "should set the subnet and private IP address parameters" do
+          instance_manager = described_class.new(region, registry)
+          instance_manager.set_vpc_parameters(
+              {"network" => {"type" => "manual", "ip" => "1.2.3.4", "subnet" => "sub-123456"}}
+          )
+
+          instance_manager.instance_params[:private_ip_address].should == "1.2.3.4"
+          instance_manager.instance_params[:subnet].should == fake_aws_subnet
+        end
+      end
+
+      context "when there is a network in the specs with unspecified type" do
+        it "should set the subnet and private IP address parameters for that network (treat it as manual)" do
+          instance_manager = described_class.new(region, registry)
+          instance_manager.set_vpc_parameters({"network" => {"ip" => "1.2.3.4", "subnet" => "sub-123456"}})
+
+          instance_manager.instance_params[:private_ip_address].should == "1.2.3.4"
+          instance_manager.instance_params[:subnet].should == fake_aws_subnet
+        end
+      end
+    end
+
+    describe "#set_availability_zone_parameter" do
+      context "if there is a common availability zone specified" do
+        before do
+          availability_zone_selector.stub(:common_availability_zone).and_return("danger zone")
+        end
+
+        it "sets the availability zone parameter appropriately" do
+          instance_manager = described_class.new(region, registry, availability_zone_selector)
+          instance_manager.set_availability_zone_parameter(["danger zone"], nil, "danger zone")
+          instance_manager.instance_params[:availability_zone].should == "danger zone"
+        end
+      end
+
+      context "if there is no common availability zone" do
+        before do
+          availability_zone_selector.stub(:common_availability_zone).and_return(nil)
+        end
+
+        it "does not set the availability zone parameter" do
+          instance_manager = described_class.new(region, registry, availability_zone_selector)
+          instance_manager.set_availability_zone_parameter([], nil, nil)
+          instance_manager.instance_params.keys.should_not include(:availability_zone)
+        end
+      end
+    end
+
+    describe "#set_user_data_parameter" do
+      context "when a dns configuration is provided" do
+        it "populates the user data parameter with registry and dns data" do
+          instance_manager = described_class.new(region, registry)
+          instance_manager.set_user_data_parameter(
+              {
+                  "foo" => {"dns" => "bar"}
+              }
+          )
+
+          instance_manager.instance_params[:user_data].should == {
+              registry: {endpoint: "http://..."},
+              dns: {nameserver: "bar"}
+          }
+        end
+      end
+
+      context "when a dns configuration is not provided" do
+        it "populates the user data parameter with only the registry data" do
+          instance_manager = described_class.new(region, registry)
+          instance_manager.set_user_data_parameter(
+              {
+                  "foo" => {"no_dns" => "bar"}
+              }
+          )
+
+          instance_manager.instance_params[:user_data].should == {
+              registry: {endpoint: "http://..."}
+          }
+        end
+      end
     end
   end
 
   describe "#terminate" do
+    let(:instance_id) { "i-123456" }
+    let(:fake_aws_instance) { double("aws_instance", id: instance_id) }
+    let(:instance_manager) { described_class.new(region, registry) }
+
     it "should terminate an instance given the id" do
-      instance.should_receive(:terminate)
+      fake_aws_instance.should_receive(:terminate)
       registry.should_receive(:delete_settings).with(instance_id)
 
-      region.stub(:instances).and_return({instance_id => instance})
-      im.stub(:wait_resource)
+      region.stub(:instances).and_return({instance_id => fake_aws_instance})
+      instance_manager.stub(:wait_resource)
 
-      im.terminate(instance_id)
+      instance_manager.terminate(instance_id)
     end
 
     it "should ignore AWS::EC2::Errors::InvalidInstanceID::NotFound exception from wait_resource" do
-      instance.should_receive(:terminate)
+      fake_aws_instance.should_receive(:terminate)
       registry.should_receive(:delete_settings).with(instance_id)
 
-      region.stub(:instances).and_return({instance_id => instance})
-      im.stub(:wait_resource).and_raise AWS::EC2::Errors::InvalidInstanceID::NotFound
+      region.stub(:instances).and_return({instance_id => fake_aws_instance})
+      instance_manager.stub(:wait_resource).and_raise AWS::EC2::Errors::InvalidInstanceID::NotFound
 
       expect {
-        im.terminate(instance_id)
+        instance_manager.terminate(instance_id)
       }.to_not raise_error
     end
   end
 
   describe "#reboot" do
+    let(:fake_aws_instance) { double("aws_instance") }
+    let(:instance_id) { "i-123456" }
+    let(:instance_manager) { described_class.new(region, registry) }
+
     it "should reboot the instance" do
-      instance.should_receive(:reboot)
+      fake_aws_instance.should_receive(:reboot)
 
-      region.stub(:instances).and_return({instance_id => instance})
+      region.stub(:instances).and_return({instance_id => fake_aws_instance})
 
-      im.reboot(instance_id)
+      instance_manager.reboot(instance_id)
     end
   end
-
 end

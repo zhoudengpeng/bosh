@@ -20,5 +20,7 @@ module Bosh::AwsCloud
       @ip
     end
 
+    def configure(ec2, instance)
+    end
   end
 end

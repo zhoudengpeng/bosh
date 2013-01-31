@@ -22,5 +22,5 @@ Gem::Specification.new do |s|
   s.add_dependency "sinatra"
   s.add_dependency "thin"
   s.add_dependency "yajl-ruby"
-  s.add_dependency "aws-sdk", "~>1.6.9"
+  s.add_dependency "aws-sdk", ">=1.8.0"
 end
