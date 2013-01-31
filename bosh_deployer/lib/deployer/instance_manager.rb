@@ -136,6 +136,7 @@ module Bosh::Deployer
         end
         save_state
       rescue => e
+        logger.err("caught #{e.inspect}")
         # only delete the stemcell if we were trying to upload it
         delete_stemcell if is_tgz?(stemcell_tgz)
         raise e
